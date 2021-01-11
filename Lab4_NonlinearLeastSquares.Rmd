@@ -1,0 +1,171 @@
+---
+title: "Lab4_NonlinearLeastSquares"
+author: "sbsambado"
+date: "1/10/2021"
+output: html_document
+---
+
+Lab Week 4:
+
+- Nonlinear least squares
+- Panel regression level 0 example
+- Shiny example with navbarPage
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(Ecdat)
+library(plm)
+library(lmtest)
+library(car) #for plotting
+```
+
+
+##Part 1. Nonlinear least squares (logistic growth fitting)
+
+Recall logistic growth equation: 
+
+N(t) = A/(1+Be^-rt)
+```{r}
+
+CellGrowth <- read_csv("CellGrowth.csv")
+
+ggplot(CellGrowth, aes(x = Time, y = CellCount))+
+  geom_point()
+
+# Estimate for K/A: ~ 3700
+# Estimate for N0: ~ 2000
+# Estimate for B: ~ 0.85
+
+BEstimate <- (3700 - 2000)/2000 # BEstimate = 0.85
+
+
+#c. Create a subset of the data that you think is just in the 'exponential growth phase.' Take the natural log of the count and create a basic scatterplot of time v ln(counts). 
+
+Graph2 <- plot(CellGrowth$Time[0:5], log(CellGrowth$CellCount[0:5]))
+
+#Then find the slope of that line to get 'r' (growth rate constant)
+
+r_est <-lm(log(CellGrowth$CellCount[1:5]) ~ CellGrowth$Time[1:5])
+
+# R ~ 0.1035
+
+```
+
+
+d. Nonlinear least squares 
+
+e. Model fitting 
+
+```{r}
+cell_fit <- nls(CellCount ~ A/(1+ B*exp(-r*Time)),
+                start = list(A = 3700, B = 0.85, r = 0.1035),
+                data = CellGrowth, trace = TRUE)
+# 8 iterations until converged
+```
+
+f. Create new variables for A, B and r
+```{r}
+
+A <- coef(cell_fit)[1]
+B <- coef(cell_fit)[2]
+r <- coef(cell_fit)[3]
+```
+
+
+g. Create a new sequence containing a series of times over which you'll predict the cell count
+```{r}
+time_seq <- seq(0, 20, length = 100)
+```
+
+h. Using the parameters (A, B, and r) and the time sequence, predict the cell counts for the logistic growth model
+```{r}
+cell_pred <- A/(1+B*exp(-r*time_seq))
+```
+
+i. Bind together the time sequence data and the predictions data into a new data frame
+```{r}
+pred_df <- data.frame(time_seq, cell_pred)
+```
+
+
+j. Create a single graph in which you show the original data (as scatterplot points) and the predicted data (as a line graph)
+```{r}
+ggplot(CellGrowth, aes(x = Time, y = CellCount))+
+  geom_point(color = "blue", size = 3) +
+  theme_bw()+
+  geom_line(data = pred_df, aes(x = time_seq, y = cell_pred),
+            color = "orange", size = 1)+
+  xlab("Time (h)")+
+  ylab("Cell Count")+
+  ggtitle("Bacterial Growth")
+```
+
+###Part 2. Panel Regression - First Shot
+```{r}
+cigs_panel <- Cigarette %>% 
+  select(state, year, packpc, avgprs)
+
+ggplot(Cigarette, aes(x = avgprs, y = packpc, group = state))+
+  geom_point(aes(color = state))+
+  geom_smooth(method = "lm",
+              aes(color = state),
+              size = .3, se = FALSE)
+
+ggplot(Cigarette, aes(x = year, y = packpc, group = state)) +
+  geom_point(aes(color = state)) +
+  geom_smooth(method = "lm",
+              aes(color = state),
+              size = .3,
+              se = FALSE)
+
+ggplot(Cigarette, aes(x = year, y = avgprs, group = state)) +
+  geom_point(aes(color = state)) +
+  geom_smooth(method = "lm",
+              aes(color = state),
+              size = 0.3,
+              se = FALSE)
+```
+### Entity Fixed Effects Model
+
+Our research question is: How did the average price of cigarettes relate to the number of packs per person from 1985-1995 ON AVERAGE across all 50 states?
+```{r}
+cigs_model <- plm(packpc ~ avgprs,
+                 data = cigs_panel, 
+                 index = c("state", "year"),
+                 model = "within")
+
+cigs_model #So the number of packs per person decreased by an average of 0.364 when average price increased by 1 dollar across all 50 states
+
+
+coeftest(cigs_model, vcov. = vcovHC(cigs_model, type = "HC1"))# coefficient is extremely significant (using robust SE)
+```
+
+But we know the number of packs per person has been going down across the United States for health reasons too, not just financial.  So we are going to use a time and entity fixed effects model.
+
+
+### Time and Entity Fixed Effects Model
+
+```{r}
+et_cigs_model <- plm(packpc ~ avgprs, 
+                     data = cigs_panel, 
+                     index = c("state", "year"),
+                     model = "within",
+                     effect = "twoways") #time
+
+coeftest(et_cigs_model, vcov. = vcovHC(et_cigs_model, type = "HC1")) #coefficient is still highly significant, but is a different value
+```
+
+### Which model is better?
+
+Should we use time fixed effects, or just entity fixed effects?
+```{r}
+# within model, pooling model
+pFtest(et_cigs_model, cigs_model)
+
+?pFtest
+#**Conclusion:** Yes, we should include time fixed effects.  This makes sense, because we know that cigarette use is decreasing universally over time due to so many factors - health, societal pressure, etc.  We would expect time to substantially influence the number of packs per person.
+
+```
+
